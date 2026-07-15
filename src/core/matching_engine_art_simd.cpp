@@ -31,6 +31,12 @@ std::vector<Trade> MatchingEngineARTSIMD::process_order_art_simd(Order* order) {
 std::vector<Trade> MatchingEngineARTSIMD::match_order_art_simd(Order* order) {
     std::vector<Trade> trades;
     
+    if (order->order_type == OrderType::FOK &&
+        orderbook_art_simd_.crossable_quantity(order) < order->remaining_quantity) {
+        order->status = OrderStatus::CANCELLED;
+        return trades;
+    }
+    
     if (order->side == OrderSide::BUY) {
         // Match against asks using SIMD-optimized lookup
         OrderBookSideARTSIMD& asks = orderbook_art_simd_.asks();
@@ -76,6 +82,8 @@ std::vector<Trade> MatchingEngineARTSIMD::match_order_art_simd(Order* order) {
             } else {
                 maker->status = OrderStatus::PARTIAL_FILLED;
             }
+
+            orderbook_art_simd_.apply_trade_to_price_level(maker, trade_qty);
             
             Trade trade;
             trade.buy_order_id = order->order_id;
@@ -140,6 +148,8 @@ std::vector<Trade> MatchingEngineARTSIMD::match_order_art_simd(Order* order) {
             } else {
                 maker->status = OrderStatus::PARTIAL_FILLED;
             }
+
+            orderbook_art_simd_.apply_trade_to_price_level(maker, trade_qty);
             
             Trade trade;
             trade.buy_order_id = maker->order_id;
@@ -159,6 +169,11 @@ std::vector<Trade> MatchingEngineARTSIMD::match_order_art_simd(Order* order) {
                 orderbook_art_simd_.remove_order(maker);
             }
         }
+    }
+
+    if ((order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) &&
+        order->remaining_quantity > 0) {
+        order->status = OrderStatus::CANCELLED;
     }
     
     return trades;

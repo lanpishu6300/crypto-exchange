@@ -10,7 +10,8 @@ OrderBookSide::OrderBookSide(bool is_buy)
     : is_buy_(is_buy), root_(nullptr), sentinel_(nullptr) {
     sentinel_ = new Order();  // Sentinel node (nil)
     sentinel_->color = 0;  // Black
-    sentinel_->left = sentinel_->right = sentinel_->parent = sentinel_;
+    sentinel_->left = sentinel_->right = sentinel_;
+    sentinel_->parent = nullptr;
     root_ = sentinel_;
 }
 
@@ -109,9 +110,7 @@ bool OrderBookSide::remove(Order* order) {
         } else {
             z->parent->right = z->right;
         }
-        if (z->right != sentinel_) {
-            z->right->parent = z->parent;
-        }
+        z->right->parent = z->parent;
     } else if (z->right == sentinel_) {
         x = z->left;
         if (z->parent == nullptr) {
@@ -121,26 +120,20 @@ bool OrderBookSide::remove(Order* order) {
         } else {
             z->parent->right = z->left;
         }
-        if (z->left != sentinel_) {
-            z->left->parent = z->parent;
-        }
+        z->left->parent = z->parent;
     } else {
         y = find_min(z->right);
         y_original_color = y->color;
         x = y->right;
         if (y->parent == z) {
-            if (x != sentinel_) {
-                x->parent = y;
-            }
+            x->parent = y;
         } else {
             if (y->parent->left == y) {
                 y->parent->left = x;
             } else {
                 y->parent->right = x;
             }
-            if (x != sentinel_) {
-                x->parent = y->parent;
-            }
+            x->parent = y->parent;
             y->right = z->right;
             if (y->right != sentinel_) {
                 y->right->parent = y;
@@ -161,7 +154,7 @@ bool OrderBookSide::remove(Order* order) {
         y->color = z->color;
     }
     
-    if (y_original_color == 0 && x != sentinel_) {
+    if (y_original_color == 0) {
         fix_delete(x);
     }
     
@@ -277,6 +270,49 @@ void OrderBookSide::get_depth(size_t n, std::vector<PriceLevel>& levels) const {
             }
         }
     }
+}
+
+void OrderBookSide::apply_trade_to_price_level(Order* order, Quantity traded_qty) {
+    if (!order || traded_qty == 0) {
+        return;
+    }
+    auto it = price_levels_.find(order->price);
+    if (it != price_levels_.end()) {
+        if (it->second.total_quantity >= traded_qty) {
+            it->second.total_quantity -= traded_qty;
+        } else {
+            it->second.total_quantity = 0;
+        }
+    }
+}
+
+Quantity OrderBookSide::crossable_quantity(Price limit_price, bool taker_is_buy) const {
+    Quantity total = 0;
+    if (is_buy_ == taker_is_buy) {
+        return 0;
+    }
+    if (taker_is_buy) {
+        for (const auto& [price, level] : price_levels_) {
+            if (level.total_quantity == 0) {
+                continue;
+            }
+            if (limit_price > 0 && price > limit_price) {
+                break;
+            }
+            total += level.total_quantity;
+        }
+    } else {
+        for (auto it = price_levels_.rbegin(); it != price_levels_.rend(); ++it) {
+            if (it->second.total_quantity == 0) {
+                continue;
+            }
+            if (limit_price > 0 && it->first < limit_price) {
+                break;
+            }
+            total += it->second.total_quantity;
+        }
+    }
+    return total;
 }
 
 void OrderBookSide::rotate_left(Order* x) {
@@ -561,6 +597,28 @@ void OrderBook::get_depth(size_t n, std::vector<PriceLevel>& bids,
                           std::vector<PriceLevel>& asks) const {
     bids_.get_depth(n, bids);
     asks_.get_depth(n, asks);
+}
+
+void OrderBook::apply_trade_to_price_level(Order* order, Quantity traded_qty) {
+    if (!order) {
+        return;
+    }
+    if (order->is_buy()) {
+        bids_.apply_trade_to_price_level(order, traded_qty);
+    } else {
+        asks_.apply_trade_to_price_level(order, traded_qty);
+    }
+}
+
+Quantity OrderBook::crossable_quantity(Order* taker) const {
+    if (!taker) {
+        return 0;
+    }
+    Price limit = (taker->order_type == OrderType::MARKET) ? 0 : taker->price;
+    if (taker->is_buy()) {
+        return asks_.crossable_quantity(limit, true);
+    }
+    return bids_.crossable_quantity(limit, false);
 }
 
 } // namespace perpetual

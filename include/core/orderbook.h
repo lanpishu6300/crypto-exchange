@@ -62,6 +62,12 @@ public:
     
     // Get top N price levels for market data
     void get_depth(size_t n, std::vector<PriceLevel>& levels) const;
+
+    // Adjust aggregated depth after a trade (maker/taker resting in book)
+    void apply_trade_to_price_level(Order* order, Quantity traded_qty);
+
+    // Sum crossable resting quantity for FOK pre-check
+    Quantity crossable_quantity(Price limit_price, bool taker_is_buy) const;
     
 private:
     // Red-black tree operations
@@ -133,6 +139,9 @@ public:
     // Get order book depth
     void get_depth(size_t n, std::vector<PriceLevel>& bids, 
                    std::vector<PriceLevel>& asks) const;
+
+    void apply_trade_to_price_level(Order* order, Quantity traded_qty);
+    Quantity crossable_quantity(Order* taker) const;
     
     // Access order book sides (for matching engine)
     OrderBookSide& bids() { return bids_; }

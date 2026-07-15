@@ -70,6 +70,9 @@ protected:
     
     // Get match price (price-time priority)
     Price get_match_price(const Order* incoming, const Order* resting) const;
+
+    // FOK all-or-nothing pre-check
+    bool validate_fok_order(Order* order, OrderBookSide* opposite_side) const;
     
     InstrumentID instrument_id_;
     OrderBook orderbook_;
