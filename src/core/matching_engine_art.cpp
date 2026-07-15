@@ -37,6 +37,12 @@ std::vector<Trade> MatchingEngineART::process_order_art(Order* order) {
 std::vector<Trade> MatchingEngineART::match_order_art(Order* order) {
     std::vector<Trade> trades;
     
+    if (order->order_type == OrderType::FOK &&
+        orderbook_art_.crossable_quantity(order) < order->remaining_quantity) {
+        order->status = OrderStatus::CANCELLED;
+        return trades;
+    }
+    
     if (order->side == OrderSide::BUY) {
         // Match against asks
         OrderBookSideART& asks = orderbook_art_.asks();
@@ -134,6 +140,11 @@ std::vector<Trade> MatchingEngineART::match_order_art(Order* order) {
             }
         }
     }
+
+    if ((order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) &&
+        order->remaining_quantity > 0) {
+        order->status = OrderStatus::CANCELLED;
+    }
     
     return trades;
 }
@@ -143,6 +154,8 @@ void MatchingEngineART::execute_trade_art(Order* taker, Order* maker, Price pric
     taker->filled_quantity += quantity;
     maker->remaining_quantity -= quantity;
     maker->filled_quantity += quantity;
+
+    orderbook_art_.apply_trade_to_price_level(maker, quantity);
     
     if (taker->remaining_quantity == 0) {
         taker->status = OrderStatus::FILLED;

@@ -69,8 +69,8 @@ bool OrderBookSideARTSIMD::update_quantity(Order* order, Quantity new_quantity) 
     std::lock_guard<std::mutex> lock(mutex_);
     
     PriceLevel* level = get_or_create_price_level(order->price);
-    level->total_quantity -= order->quantity;
-    order->quantity = new_quantity;
+    level->total_quantity -= order->remaining_quantity;
+    order->remaining_quantity = new_quantity;
     level->total_quantity += new_quantity;
     
     return true;
@@ -206,7 +206,7 @@ void OrderBookSideARTSIMD::add_order_to_price_level(PriceLevel* level, Order* or
         level->last_order->next_same_price = order;
         level->last_order = order;
     }
-    level->total_quantity += order->quantity;
+    level->total_quantity += order->remaining_quantity;
 }
 
 void OrderBookSideARTSIMD::remove_order_from_price_level(PriceLevel* level, Order* order) {
@@ -222,9 +222,46 @@ void OrderBookSideARTSIMD::remove_order_from_price_level(PriceLevel* level, Orde
         level->last_order = order->prev_same_price;
     }
     
-    level->total_quantity -= order->quantity;
+    level->total_quantity -= order->remaining_quantity;
+    if (level->total_quantity < 0) {
+        level->total_quantity = 0;
+    }
     order->next_same_price = nullptr;
     order->prev_same_price = nullptr;
+}
+
+void OrderBookSideARTSIMD::apply_trade_to_price_level(Order* order, Quantity traded_qty) {
+    if (!order || traded_qty == 0) {
+        return;
+    }
+    auto it = price_levels_.find(order->price);
+    if (it != price_levels_.end()) {
+        if (it->second.total_quantity >= traded_qty) {
+            it->second.total_quantity -= traded_qty;
+        } else {
+            it->second.total_quantity = 0;
+        }
+    }
+}
+
+Quantity OrderBookSideARTSIMD::crossable_quantity(Price limit_price, bool taker_is_buy) const {
+    if (is_buy_ == taker_is_buy) {
+        return 0;
+    }
+    Quantity total = 0;
+    for (const auto& [price, level] : price_levels_) {
+        if (level.total_quantity == 0) {
+            continue;
+        }
+        if (taker_is_buy) {
+            if (limit_price == 0 || price <= limit_price) {
+                total += level.total_quantity;
+            }
+        } else if (limit_price == 0 || price >= limit_price) {
+            total += level.total_quantity;
+        }
+    }
+    return total;
 }
 
 // OrderBookARTSIMD implementation
@@ -311,6 +348,28 @@ void OrderBookARTSIMD::get_depth(size_t n, std::vector<PriceLevel>& bids,
                                  std::vector<PriceLevel>& asks) const {
     bids_.get_depth(n, bids);
     asks_.get_depth(n, asks);
+}
+
+void OrderBookARTSIMD::apply_trade_to_price_level(Order* order, Quantity traded_qty) {
+    if (!order) {
+        return;
+    }
+    if (order->is_buy()) {
+        bids_.apply_trade_to_price_level(order, traded_qty);
+    } else {
+        asks_.apply_trade_to_price_level(order, traded_qty);
+    }
+}
+
+Quantity OrderBookARTSIMD::crossable_quantity(Order* taker) const {
+    if (!taker) {
+        return 0;
+    }
+    Price limit = (taker->order_type == OrderType::MARKET) ? 0 : taker->price;
+    if (taker->is_buy()) {
+        return asks_.crossable_quantity(limit, true);
+    }
+    return bids_.crossable_quantity(limit, false);
 }
 
 } // namespace perpetual

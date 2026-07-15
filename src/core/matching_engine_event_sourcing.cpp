@@ -173,6 +173,12 @@ std::vector<Trade> MatchingEngineEventSourcing::match_order_deterministic(Order*
     if (!opposite_side) {
         return trades;
     }
+
+    if (order->order_type == OrderType::FOK &&
+        !validate_fok_order(order, opposite_side)) {
+        order->status = OrderStatus::CANCELLED;
+        return trades;
+    }
     
     const size_t max_iterations = 10000;
     size_t iteration_count = 0;
@@ -199,6 +205,8 @@ std::vector<Trade> MatchingEngineEventSourcing::match_order_deterministic(Order*
         order->remaining_quantity -= actual_qty;
         resting_order->filled_quantity += actual_qty;
         resting_order->remaining_quantity -= actual_qty;
+
+        orderbook_.apply_trade_to_price_level(resting_order, actual_qty);
         
         // Create trade record
         Trade trade;
@@ -254,14 +262,11 @@ std::vector<Trade> MatchingEngineEventSourcing::match_order_deterministic(Order*
                 break;
             }
         }
-        
-        // Handle IOC and FOK orders
-        if (order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) {
-            if (order->remaining_quantity > 0) {
-                order->status = OrderStatus::CANCELLED;
-            }
-            break;
-        }
+    }
+    
+    if ((order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) &&
+        order->remaining_quantity > 0) {
+        order->status = OrderStatus::CANCELLED;
     }
     
     // Update order status

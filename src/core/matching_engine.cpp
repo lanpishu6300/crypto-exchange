@@ -81,6 +81,12 @@ std::vector<Trade> MatchingEngine::match_order(Order* order) {
     if (!opposite_side) {
         return trades;
     }
+
+    if (order->order_type == OrderType::FOK &&
+        !validate_fok_order(order, opposite_side)) {
+        order->status = OrderStatus::CANCELLED;
+        return trades;
+    }
     
     // Match against resting orders (hot path optimization)
     // Add safety counter to prevent infinite loops
@@ -136,14 +142,12 @@ std::vector<Trade> MatchingEngine::match_order(Order* order) {
                 break;
             }
         }
-        
-        // Handle IOC and FOK orders
-        if (order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) {
-            if (order->remaining_quantity > 0) {
-                order->status = OrderStatus::CANCELLED;
-            }
-            break;
-        }
+    }
+    
+    // IOC/FOK: cancel any unfilled remainder (loop above sweeps all crossable makers)
+    if ((order->order_type == OrderType::IOC || order->order_type == OrderType::FOK) &&
+        order->remaining_quantity > 0) {
+        order->status = OrderStatus::CANCELLED;
     }
     
     // Update order status
@@ -173,6 +177,14 @@ void MatchingEngine::execute_trade(Order* buy_order, Order* sell_order,
     
     actual_sell->filled_quantity += quantity;
     actual_sell->remaining_quantity -= quantity;
+
+    // Keep price-level aggregates in sync with partial/full fills
+    if (orderbook_.bids().find_order(actual_buy->order_id)) {
+        orderbook_.apply_trade_to_price_level(actual_buy, quantity);
+    }
+    if (orderbook_.asks().find_order(actual_sell->order_id)) {
+        orderbook_.apply_trade_to_price_level(actual_sell, quantity);
+    }
 }
 
 Trade MatchingEngine::create_trade(Order* buy_order, Order* sell_order, 
@@ -257,6 +269,13 @@ Price MatchingEngine::get_match_price(const Order* incoming, const Order* restin
     // Price-time priority: use the price of the order that was in the book first
     // (resting order)
     return resting->price;
+}
+
+bool MatchingEngine::validate_fok_order(Order* order, OrderBookSide* opposite_side) const {
+    if (!order || !opposite_side) {
+        return false;
+    }
+    return orderbook_.crossable_quantity(order) >= order->remaining_quantity;
 }
 
 bool MatchingEngine::cancel_order(OrderID order_id, UserID user_id) {
